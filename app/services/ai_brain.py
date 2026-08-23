@@ -265,8 +265,11 @@ Return ONLY this JSON structure:
         }
 
     def _generate_demo_response(self, prompt: str, system_prompt: str = "") -> str:
-        combined = (system_prompt + " " + prompt).lower()
-        if "test debt" in combined or "test coverage gaps" in combined:
+        # Match on system_prompt only, not the combined prompt+diff.
+        # This prevents false positives when code changes contain
+        # keywords like "self-healing" or "test debt".
+        system_lower = system_prompt.lower()
+        if "qa architect" in system_lower or "test coverage gaps" in system_lower:
             return json.dumps({
                 "findings": [
                     {
@@ -278,7 +281,7 @@ Return ONLY this JSON structure:
                     }
                 ]
             })
-        if "self-healing" in combined or "propose a correct" in combined:
+        if "self-healing" in system_lower or "propose a corrected test" in system_lower:
             return json.dumps({
                 "proposed_steps": "1. Navigate to login page\n2. Enter valid email\n3. Enter valid password\n4. Click #proceed-payment button\n5. Verify redirect to dashboard",
                 "rationale": "The UI element was renamed from #checkout to #proceed-payment but the underlying functionality remains the same.",
