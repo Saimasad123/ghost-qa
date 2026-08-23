@@ -18,19 +18,30 @@ class AIBrainService:
     def __init__(self):
         self.xai_client = None
         self.anthropic_client = None
-        self.demo_mode = settings.DEMO_MODE or not (settings.XAI_API_KEY or settings.ANTHROPIC_API_KEY)
 
-        if settings.XAI_API_KEY and _has_openai:
+        # Validate XAI API key format (must start with 'xai-')
+        xai_key = settings.XAI_API_KEY
+        if xai_key and _has_openai and xai_key.startswith(("xai-", "sk-")):
             self.xai_client = OpenAI(
-                api_key=settings.XAI_API_KEY,
+                api_key=xai_key,
                 base_url="https://api.x.ai/v1"
             )
-        elif settings.ANTHROPIC_API_KEY:
+        elif xai_key:
+            logger.warning(f"XAI API key format unrecognized, falling back to demo mode")
+
+        # Validate Anthropic API key format (must start with 'sk-ant-')
+        anthropic_key = settings.ANTHROPIC_API_KEY
+        if anthropic_key and anthropic_key.startswith("sk-ant-"):
             try:
                 from anthropic import Anthropic
-                self.anthropic_client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                self.anthropic_client = Anthropic(api_key=anthropic_key)
             except ImportError:
                 logger.warning("anthropic package not installed; falling back to demo mode")
+        elif anthropic_key:
+            logger.warning(f"Anthropic API key format unrecognized, falling back to demo mode")
+
+        # Demo mode if no valid AI provider configured
+        self.demo_mode = settings.DEMO_MODE or (not self.xai_client and not self.anthropic_client)
 
     def _call_ai(self, prompt: str, system_prompt: str = "", max_tokens: int = 4096) -> str:
         if self.demo_mode:
@@ -45,7 +56,8 @@ class AIBrainService:
                 response = self.xai_client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    max_tokens=max_tokens
+                    max_tokens=max_tokens,
+                    timeout=5
                 )
                 return response.choices[0].message.content
             elif self.anthropic_client:
