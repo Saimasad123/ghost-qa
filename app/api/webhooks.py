@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from typing import Dict, Any, List
 from fastapi import APIRouter, Request, HTTPException, Depends
 from app.config import settings
@@ -10,7 +11,7 @@ from app.services.executor import ExecutorService
 from app.services.risk import RiskEngine
 from app.services.healing import HealingService
 from app.services.slack import SlackService
-from app.database import init_db, get_db
+from app.database import init_db, get_db, SessionLocal
 from sqlalchemy.orm import Session
 from app.models import (
     PipelineRun, PipelineStatus, RiskLevel, TestCase, TestResult,
@@ -30,6 +31,25 @@ executor_service = ExecutorService()
 risk_engine = RiskEngine()
 healing_service = HealingService()
 slack_service = SlackService()
+
+
+def _run_pipeline_async(pipeline_run_id: str, pr_info: Dict[str, Any]) -> None:
+    """Run pipeline in a background thread with its own DB session."""
+    db = SessionLocal()
+    try:
+        _run_pipeline(pipeline_run_id, pr_info, db)
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {e}")
+        db_ = SessionLocal()
+        try:
+            run = db_.query(PipelineRun).filter(PipelineRun.id == pipeline_run_id).first()
+            if run:
+                run.status = PipelineStatus.failed
+                db_.commit()
+        finally:
+            db_.close()
+    finally:
+        db.close()
 
 
 @router.post("/github")
@@ -81,7 +101,7 @@ async def github_webhook(request: Request):
             db.commit()
             db.refresh(repository)
 
-         # Check for duplicate webhook (idempotency)
+        # Check for duplicate webhook (idempotency)
         existing_run = db.query(PipelineRun).filter(
             PipelineRun.repository_id == repository.id,
             PipelineRun.github_pr_number == pr_number,
@@ -110,13 +130,9 @@ async def github_webhook(request: Request):
         db.commit()
         db.refresh(pipeline_run)
 
-        # Start pipeline asynchronously (in production, use a task queue)
-        try:
-            _run_pipeline(pipeline_run.id, pr_info, db)
-        except Exception as e:
-            logger.error(f"Pipeline execution failed: {e}")
-            pipeline_run.status = PipelineStatus.failed
-            db.commit()
+        # Start pipeline in background thread
+        thread = threading.Thread(target=_run_pipeline_async, args=(pipeline_run.id, pr_info), daemon=True)
+        thread.start()
 
         return {
             "status": "pipeline_started",

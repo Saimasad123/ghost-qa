@@ -103,12 +103,13 @@ python -c "from app.database import init_db; init_db()"
 | `GITHUB_TOKEN` | No* | — | GitHub API token |
 | `GITHUB_WEBHOOK_SECRET` | No* | — | GitHub webhook secret for HMAC verification |
 | `ANTHROPIC_API_KEY` | No* | — | Claude API key |
-| `UIPATH_CLIENT_ID` | No* | — | UiPath client ID |
-| `UIPATH_CLIENT_SECRET` | No* | — | UiPath client secret |
-| `UIPATH_TENANT_NAME` | No* | — | UiPath tenant name |
-| `UIPATH_ORG_ID` | No* | — | UiPath organization ID |
-| `UIPATH_ENVIRONMENT_ID` | No* | — | UiPath environment ID |
-| `UIPATH_TEST_FOLDER` | No | `GhostQA` | UiPath test folder name |
+| `UIPATH_CLIENT_ID` | No* | — | UiPath confidential external application client ID |
+| `UIPATH_CLIENT_SECRET` | No* | — | UiPath confidential external application client secret |
+| `UIPATH_TENANT_NAME` | No* | `DefaultTenant` | UiPath tenant name |
+| `UIPATH_ORG_ID` | No* | — | UiPath organization identifier |
+| `UIPATH_TEST_FOLDER` | No | `Shared/Ghost-QA` | Modern UiPath folder path (NOT an environment ID) |
+| `UIPATH_TEST_PROCESS` | Required in prod | — | Name of the UiPath process/package to execute |
+| `UIPATH_PAT` | No* | — | Personal Access Token (alternative to client credentials) |
 | `SLACK_BOT_TOKEN` | No | — | Slack bot token for notifications |
 | `SLACK_CHANNEL` | No | `ghost-qa-alerts` | Slack channel for notifications |
 | `SECRET_KEY` | Yes | — | Application secret key |
@@ -207,14 +208,117 @@ Set `ANTHROPIC_API_KEY` in `.env` to use real Claude AI. The application uses `c
 - Test debt detection
 - Self-healing proposal generation
 
-## UiPath Configuration
+## UiPath Automation Cloud Setup
 
-Set the following in `.env`:
+Ghost QA uses UiPath Automation Cloud with the **modern folder model**. The legacy "Environment" concept is no longer used.
 
-- `UIPATH_CLIENT_ID` / `UIPATH_CLIENT_SECRET`: OAuth credentials
-- `UIPATH_TENANT_NAME`: Your UiPath tenant
-- `UIPATH_ORG_ID`: Organization ID
-- `UIPATH_ENVIRONMENT_ID`: Target environment
+### Authentication Methods
+
+**Method 1: Confidential External Application (recommended for production)**
+
+Create a confidential external application in UiPath Cloud:
+
+1. Go to your UiPath Cloud Organization → Admin → External Applications
+2. Click **Add Application** → **Confidential Application**
+3. Configure:
+   - **Name**: e.g., `Ghost QA`
+   - **Scopes**: Grant **Application** scopes (not User scopes) including:
+     - `OR.Default` (for fine-grained folder-level access)
+     - `OR.Folders.Read` (to resolve folder by path)
+     - `OR.Releases.Read` (to discover processes)
+     - `OR.Jobs.Create` (to start jobs)
+     - `OR.Jobs.Read` (to poll job status)
+4. Copy the **Client ID** and **Client Secret** (shown only once)
+
+Set in `.env`:
+```
+UIPATH_CLIENT_ID=your_app_id
+UIPATH_CLIENT_SECRET=your_app_secret
+UIPATH_TENANT_NAME=DefaultTenant
+UIPATH_ORG_ID=your_org_identifier
+```
+
+**Method 2: Personal Access Token (PAT, for development/testing)**
+
+1. In UiPath Cloud: User Profile → Preferences → Personal Access Token
+2. Create a new token with relevant scopes (e.g., `OR.Default`, `OR.Jobs.Create`, `OR.Folders.Read`)
+3. Copy the token value
+
+Set in `.env`:
+```
+UIPATH_PAT=your_personal_access_token
+```
+
+**Priority**: If both are configured, the confidential application (client_credentials) takes priority. PAT is used as a fallback for development/testing.
+
+### Folder Configuration
+
+Ghost QA uses the modern UiPath **folder** model. Folders are organizational containers that replace the legacy "Environment" concept.
+
+**Required configuration**:
+```
+UIPATH_TEST_FOLDER=Shared/Ghost-QA
+```
+
+To create the folder:
+1. In UiPath Cloud Orchestrator: **Folders** → **New Folder**
+2. Set the folder path to `Shared/Ghost-QA` (create parent folder `Shared` if needed)
+3. Assign your application/user to this folder with appropriate roles
+
+### Process Configuration
+
+Specify which UiPath process to execute:
+```
+UIPATH_TEST_PROCESS=your_process_name
+```
+
+The process must be deployed to the configured folder (`Shared/Ghost-QA`) as a release in Orchestrator.
+
+### Required Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `UIPATH_CLIENT_ID` | If using PAT | — | Confidential application client ID |
+| `UIPATH_CLIENT_SECRET` | If using PAT | — | Confidential application client secret |
+| `UIPATH_TENANT_NAME` | If not using PAT | `DefaultTenant` | UiPath tenant name |
+| `UIPATH_ORG_ID` | Yes | — | UiPath organization identifier (from cloud.uipath.com URL) |
+| `UIPATH_TEST_FOLDER` | Yes | `Shared/Ghost-QA` | Modern folder path (NOT an environment) |
+| `UIPATH_TEST_PROCESS` | Yes (prod) | — | UiPath process/package name to execute |
+| `UIPATH_PAT` | If not using client credentials | — | Personal Access Token |
+
+### Testing UiPath Connectivity
+
+```bash
+# Run the discovery script
+python3 discover_uipath.py
+```
+
+This will:
+- Authenticate with UiPath
+- List available folders
+- Verify the configured folder exists
+- List available processes in the folder
+
+### Executing a Real UiPath Test
+
+1. Configure all UiPath variables in `.env`
+2. Deploy a UiPath project to the `Shared/Ghost-QA` folder in Orchestrator
+3. Set `UIPATH_TEST_PROCESS` to the deployed process name
+4. Create a PR or trigger a webhook
+5. Ghost QA will execute the UiPath process and report results
+
+### Authentication Details
+
+- **Token endpoint**: `https://cloud.uipath.com/identity_/connect/token`
+- **API base**: `https://cloud.uipath.com/{org_id}/{tenant_name}/orchestrator_`
+- **Folder header**: `X-UIPATH-FolderPath` or `X-UIPATH-OrganizationUnitId`
+- **Jobs API**: `POST /odata/Jobs/UiPath.Server.Configuration.OData.StartJob`
+
+### What NOT to Use
+
+- `UIPATH_ENVIRONMENT_ID` — This variable no longer exists. Modern UiPath uses folders, not environments.
+- Do not treat `DefaultTenant` as an environment.
+- Do not treat `Shared/Ghost-QA` as an environment ID.
 
 ## Human Approval
 
