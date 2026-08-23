@@ -82,5 +82,5 @@ class XamlGenerator:
             "priority": test_case.get("priority"),
             "step_count": len(steps),
             "estimated_duration_ms": estimated_duration_ms,
-            "target_environment": settings.UIPATH_ENVIRONMENT_ID or "default"
+            "target_folder": settings.UIPATH_TEST_FOLDER
         }

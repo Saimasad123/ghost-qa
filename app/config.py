@@ -34,8 +34,9 @@ class Settings(BaseSettings):
     UIPATH_CLIENT_SECRET: Optional[str] = None
     UIPATH_TENANT_NAME: Optional[str] = None
     UIPATH_ORG_ID: Optional[str] = None
-    UIPATH_ENVIRONMENT_ID: Optional[str] = None
-    UIPATH_TEST_FOLDER: str = "GhostQA"
+    UIPATH_TEST_FOLDER: str = "Shared/Ghost-QA"
+    UIPATH_TEST_PROCESS: Optional[str] = None
+    UIPATH_PAT: Optional[str] = None
 
     # Slack (optional)
     SLACK_BOT_TOKEN: Optional[str] = None

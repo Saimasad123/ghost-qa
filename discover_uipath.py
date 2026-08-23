@@ -1,95 +1,155 @@
 #!/usr/bin/env python3
 """
-UiPath Discovery Script - Updated for correct endpoints
+UiPath Discovery Script — Modern Automation Cloud folder model
+
+Usage:
+    python3 discover_uipath.py
+
+Discovers:
+  - Organizations accessible to the configured credentials
+  - Folders (modern model) available in the organization
+  - Processes/Releases within a folder
+
+Authentication:
+  1. PAT (Personal Access Token) — used directly as Bearer
+  2. Client Credentials — OAuth2 client_credentials flow
+
+Configuration priority: client credentials > PAT
 """
 import os
 import sys
 import json
+import time
 import requests
+from typing import Optional
 
-def get_access_token(client_id, client_secret, tenant_name="DefaultTenant"):
-    """Authenticate with UiPath and get access token."""
-    print("Authenticating with UiPath...")
+UIPATH_IDENTITY_TOKEN = "https://cloud.uipath.com/identity_/connect/token"
+UIPATH_BASE = "https://cloud.uipath.com"
+
+
+def authenticate(client_id: str, client_secret: str, tenant: str, pat: Optional[str]) -> str:
+    """Authenticate with UiPath and return an access token."""
+    if pat:
+        print("Authenticating with UiPath via PAT...")
+        return pat
+
+    if not client_id or not client_secret:
+        print("ERROR: Either UIPATH_PAT or UIPATH_CLIENT_ID + UIPATH_CLIENT_SECRET must be set.")
+        sys.exit(1)
+
+    print("Authenticating with UiPath via client credentials...")
     resp = requests.post(
-        "https://cloud.uipath.com/identity/connect/token",
+        UIPATH_IDENTITY_TOKEN,
         data={
             "grant_type": "client_credentials",
             "client_id": client_id,
             "client_secret": client_secret,
-            "scope": "OR.AuthAPI"
+            "scope": "OR.Default",
         },
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         timeout=15,
-        allow_redirects=False
     )
     if resp.status_code == 200:
-        try:
-            data = resp.json()
-            if "access_token" in data:
-                print(f"  ✓ Authenticated. Token: {data['access_token'][:30]}...")
-                return data
-        except:
-            pass
-    print(f"  Authentication returned {resp.status_code}")
-    if resp.status_code == 302:
-        loc = resp.headers.get("Location", "")
-        print(f"  Redirected to: {loc}")
-    return None
+        data = resp.json()
+        token = data.get("access_token")
+        if token:
+            print("  Authenticated successfully.")
+            return token
+    print(f"  Authentication failed: {resp.status_code} - {resp.text[:200]}")
+    sys.exit(1)
 
-if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
+
+def get_folders(token: str, org_id: str, tenant: str) -> list:
+    """List all folders in the organization using the modern folder model."""
+    url = f"{UIPATH_BASE}/{org_id}/{tenant}/orchestrator_/odata/Folders?$top=100"
+    resp = requests.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}, timeout=15)
+    if resp.status_code == 200:
+        return resp.json().get("value", [])
+    print(f"  Failed to list folders: {resp.status_code} - {resp.text[:200]}")
+    return []
+
+
+def get_releases(token: str, org_id: str, tenant: str, folder_path: str) -> list:
+    """List available releases/processes in a specific folder."""
+    url = f"{UIPATH_BASE}/{org_id}/{tenant}/orchestrator_/odata/Releases?$top=100"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "X-UIPATH-FolderPath": folder_path,
+    }
+    resp = requests.get(url, headers=headers, timeout=15)
+    if resp.status_code == 200:
+        return resp.json().get("value", [])
+    print(f"  Failed to list releases: {resp.status_code} - {resp.text[:200]}")
+    return []
+
+
+def main():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
 
     client_id = os.getenv("UIPATH_CLIENT_ID", "")
     client_secret = os.getenv("UIPATH_CLIENT_SECRET", "")
-    tenant_name = os.getenv("UIPATH_TENANT_NAME", "DefaultTenant")
+    tenant = os.getenv("UIPATH_TENANT_NAME", "DefaultTenant")
     org_id = os.getenv("UIPATH_ORG_ID", "")
+    pat = os.getenv("UIPATH_PAT", "")
+    folder_path = os.getenv("UIPATH_TEST_FOLDER", "Shared/Ghost-QA")
 
-    if not client_id or not client_secret:
-        print("ERROR: UIPATH_CLIENT_ID and UIPATH_CLIENT_SECRET must be set in .env")
+    if not org_id:
+        print("ERROR: UIPATH_ORG_ID is required in .env")
+        print("  Log in to https://cloud.uipath.com and copy the org identifier from the URL.")
         sys.exit(1)
 
-    auth = get_access_token(client_id, client_secret, tenant_name)
-    if not auth:
-        print("\n=== Cannot discover via API ===")
-        print("The UiPath client credentials may not be configured for OAuth.")
-        print("You need to register the app in UiPath Cloud:")
-        print()
-        print("1. Go to https://cloud.uipath.com")
-        print("2. Click your profile → Preferences → API Access → Clients")
-        print("3. Create a new client with:")
-        print("   - Redirect URL: https://cloud.uipath.com")
-        print("   - Scopes: OR.AuthAPI, OR.Users.Read, OR.Folders.Read")
-        print("   - Grant type: Client Credentials")
-        print()
-        print("After getting the token, run:")
-        print("  https://cloud.uipath.com/identity_api/v1/organizations")
-        print("to find your Organization ID.")
-        print()
-        print("For Environment/Folder ID:")
-        print("1. Open Orchestrator in your browser")
-        print("2. Look at the URL - the 'fid' parameter is the folder/environment ID")
-        print("   Example: https://cloud.uipath.com/{ORG}/{TENANT}/orchestrator_/Default?fid={FOLDER_ID}")
+    token = authenticate(client_id, client_secret, tenant, pat)
+
+    print(f"\nDiscovering folders in org='{org_id}', tenant='{tenant}'...")
+    folders = get_folders(token, org_id, tenant)
+
+    if not folders:
+        print("  No folders found. Check that your credentials have folder access.")
+        print("\n  To create a folder:")
+        print("    1. Go to https://cloud.uipath.com/{org_id}/{tenant_name}")
+        print("    2. Navigate to Orchestrator → Folders")
+        print("    3. Create a new folder with path: 'Shared/Ghost-QA'")
         sys.exit(1)
 
-    token = auth.get("access_token")
-    org_id = org_id or input("Enter your Organization ID: ")
+    print(f"\n  Found {len(folders)} folder(s):")
+    for f in folders:
+        name = f.get("DisplayName") or f.get("Name", "N/A")
+        fid = f.get("Id") or f.get("id")
+        fkey = f.get("Key") or f.get("key")
+        print(f"    - {name} (Id={fid}, Key={fkey})")
 
-    print(f"\nDiscoverting folders in org={org_id}, tenant={tenant_name}...")
-    base_url = f"https://cloud.uipath.com/{org_id}/{tenant_name}"
-    resp = requests.get(
-        f"{base_url}/orchestrator_/odata/Folders?$top=50",
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-        timeout=15
-    )
-    if resp.status_code == 200:
-        folders = resp.json().get("value", [])
-        print(f"Found {len(folders)} folders:")
-        for f in folders:
-            print(f"  • {f.get('DisplayName') or f.get('Name')}: ID={f.get('Id') or f.get('id')}")
-        if folders:
-            print(f"\nAdd to .env:")
-            print(f"  UIPATH_ORG_ID={org_id}")
-            print(f"  UIPATH_ENVIRONMENT_ID={folders[0].get('Id') or folders[0].get('id')}")
+    # Resolve configured folder
+    matching = [f for f in folders if (f.get("DisplayName") or f.get("Name")) == folder_path]
+    if matching:
+        f = matching[0]
+        print(f"\n  Configured folder '{folder_path}' resolved:")
+        print(f"    Id: {f.get('Id') or f.get('id')}")
+        print(f"    Key: {f.get('Key') or f.get('key')}")
+
+        # List processes
+        releases = get_releases(token, org_id, tenant, folder_path)
+        if releases:
+            print(f"\n  Processes in folder '{folder_path}':")
+            for r in releases[:20]:
+                print(f"    - {r.get('Name', 'N/A')} (Key={r.get('Key', '')[:12]}...)")
+                print(f"    Version: {r.get('Version', 'N/A')}")
+        else:
+            print(f"\n  No processes found in folder '{folder_path}'.")
+            print(f"  Deploy a UiPath project to this folder in Orchestrator.")
     else:
-        print(f"Folders request failed: {resp.status_code}")
+        print(f"\n  WARNING: Folder '{folder_path}' not found among available folders.")
+        print(f"  Available: {[f.get('DisplayName') or f.get('Name') for f in folders]}")
+
+    print(f"\n  Add to .env:")
+    print(f"    UIPATH_ORG_ID={org_id}")
+    if matching:
+        print(f"    UIPATH_TEST_FOLDER={folder_path}")
+
+
+if __name__ == "__main__":
+    main()
