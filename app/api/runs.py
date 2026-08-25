@@ -1,21 +1,37 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.database import get_db
 from app.models import (
     PipelineRun, TestCase, TestResult, HealAttempt,
     PipelineStatus, ApprovalStatus, TestCaseStatus, TestOutcome
 )
-from typing import List, Optional
 from app.schemas.test_schemas import RiskReportSchema
+from app.dependencies import require_approver
 
 router = APIRouter()
 
 
 @router.get("/")
-def get_runs(db: Session = Depends(get_db), limit: int = 50):
-    runs = db.query(PipelineRun).order_by(PipelineRun.created_at.desc()).limit(limit).all()
-    return [
-        {
+def get_runs(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    # Total count
+    total = db.query(func.count(PipelineRun.id)).scalar()
+    # Offset calculation
+    offset = (page - 1) * page_size
+    # Fetch page
+    runs = db.query(PipelineRun).order_by(PipelineRun.created_at.desc())\
+             .offset(offset).limit(page_size).all()
+    # has_next calculation
+    has_next = (page * page_size) < total
+
+    # Build response
+    result = []
+    for r in runs:
+        run_dict = {
             "id": r.id,
             "repository": r.repository.full_name if r.repository else "unknown",
             "pr_number": r.github_pr_number,
@@ -25,8 +41,17 @@ def get_runs(db: Session = Depends(get_db), limit: int = 50):
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "completed_at": r.completed_at.isoformat() if r.completed_at else None
         }
-        for r in runs
-    ]
+        result.append(run_dict)
+
+    return {
+        "runs": result,
+        "pagination": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "has_next": has_next
+        }
+    }
 
 
 @router.get("/{run_id}")
@@ -113,7 +138,7 @@ def get_run_report(run_id: str, db: Session = Depends(get_db)) -> RiskReportSche
 
 
 @router.post("/{run_id}/approve")
-def approve_run(run_id: str, db: Session = Depends(get_db)):
+def approve_run(run_id: str, user: dict = Depends(require_approver), db: Session = Depends(get_db)):
     from app.services.approval import ApprovalService
     service = ApprovalService()
     result = service.approve_all(run_id)

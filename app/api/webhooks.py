@@ -1,7 +1,11 @@
 import json
 import logging
+import threading
 from typing import Dict, Any, List
 from fastapi import APIRouter, Request, HTTPException, Depends
+from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from app.config import settings
 from app.services.github import GitHubService
 from app.services.ai_brain import AIBrainService
@@ -10,7 +14,7 @@ from app.services.executor import ExecutorService
 from app.services.risk import RiskEngine
 from app.services.healing import HealingService
 from app.services.slack import SlackService
-from app.database import init_db, get_db
+from app.database import init_db, get_db, SessionLocal
 from sqlalchemy.orm import Session
 from app.models import (
     PipelineRun, PipelineStatus, RiskLevel, TestCase, TestResult,
@@ -23,6 +27,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
 github_service = GitHubService()
 ai_service = AIBrainService()
 approval_service = ApprovalService()
@@ -33,97 +38,137 @@ slack_service = SlackService()
 
 
 @router.post("/github")
-async def github_webhook(request: Request):
-    payload_bytes = await request.body()
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    event_type = request.headers.get("X-GitHub-Event", "")
+async def handle_github_webhook(
+    request: Request,
+    payload: Dict[str, Any]
+) -> JSONResponse:
+    """Handle GitHub webhook events for pull requests."""
+    # Get headers
+    github_event = request.headers.get("X-GitHub-Event", "")
+    signature_header = request.headers.get("X-Hub-Signature-256", "")
 
-    if not github_service.verify_signature(payload_bytes, signature):
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    # Verify signature
+    if not github_service.verify_signature(
+        await request.body(),
+        signature_header
+    ):
+        return JSONResponse(
+            content={"status": "invalid_signature"},
+            status_code=401
+        )
 
-    try:
-        payload = json.loads(payload_bytes)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    # Check event type - only handle pull_request events
+    if github_event != "pull_request":
+        return JSONResponse(
+            content={"status": "ignored"},
+            status_code=200
+        )
 
-    if event_type != "pull_request":
-        return {"status": "ignored", "event": event_type}
-
+    # Check action type - only handle opened and synchronize
     action = payload.get("action", "")
-    if action not in ["opened", "synchronize", "reopened"]:
-        return {"status": "ignored", "action": action}
+    if action not in ("opened", "synchronize"):
+        return JSONResponse(
+            content={"status": "ignored"},
+            status_code=200
+        )
 
+    # Extract PR info
     pr_info = github_service.extract_pr_info(payload)
-    repo_full_name = pr_info["repo_full_name"]
-    owner, repo_name = repo_full_name.split("/", 1)
     pr_number = pr_info["pr_number"]
+    commit_sha = pr_info["commit_sha"]
 
-    # Get or create organisation and repository
-    db = next(get_db())
+    # Check for duplicates
+    db = SessionLocal()
     try:
-        org = db.query(Organisation).first()
-        if not org:
-            org = Organisation(id=str(uuid.uuid4()), name=owner, github_org_id=str(payload.get("repository", {}).get("id", "")))
-            db.add(org)
-            db.commit()
-            db.refresh(org)
+        existing_run = db.query(PipelineRun).filter(
+            PipelineRun.github_pr_number == pr_number,
+            PipelineRun.commit_sha == commit_sha
+        ).first()
 
-        repository = db.query(Repository).filter(Repository.full_name == repo_full_name).first()
-        if not repository:
-            repository = Repository(
+        if existing_run:
+            return JSONResponse(
+                content={
+                    "status": "duplicate_ignored",
+                    "pipeline_run_id": existing_run.id
+                },
+                status_code=200
+            )
+
+        # Create repository if not exists
+        repo_full_name = pr_info["repo_full_name"]
+        repo = db.query(Repository).filter(
+            Repository.full_name == repo_full_name
+        ).first()
+
+        if not repo:
+            # Create org if not exists
+            org_name = pr_info["repo_owner"]
+            org = db.query(Organisation).filter(
+                Organisation.name == org_name
+            ).first()
+            if not org:
+                org = Organisation(
+                    id=str(uuid.uuid4()),
+                    name=org_name,
+                    created_at=datetime.utcnow()
+                )
+                db.add(org)
+                db.commit()
+
+            repo = Repository(
                 id=str(uuid.uuid4()),
                 organisation_id=org.id,
-                github_repo_id=str(payload.get("repository", {}).get("id", "")),
                 full_name=repo_full_name,
-                default_branch=pr_info.get("branch", "main")
+                created_at=datetime.utcnow()
             )
-            db.add(repository)
+            db.add(repo)
             db.commit()
-            db.refresh(repository)
-
-         # Check for duplicate webhook (idempotency)
-        existing_run = db.query(PipelineRun).filter(
-            PipelineRun.repository_id == repository.id,
-            PipelineRun.github_pr_number == pr_number,
-            PipelineRun.commit_sha == pr_info["commit_sha"],
-        ).order_by(PipelineRun.created_at.desc()).first()
-        if existing_run and (datetime.utcnow() - existing_run.created_at).total_seconds() < 300:
-            logger.info(f"Duplicate webhook received, existing pipeline run: {existing_run.id}")
-            return {
-                "status": "duplicate_ignored",
-                "pipeline_run_id": existing_run.id,
-                "pr_number": pr_number,
-                "repository": repo_full_name
-            }
 
         # Create pipeline run
+        pipeline_run_id = str(uuid.uuid4())
         pipeline_run = PipelineRun(
-            id=str(uuid.uuid4()),
-            repository_id=repository.id,
+            id=pipeline_run_id,
+            repository_id=repo.id,
             trigger_type="github_pr",
             github_pr_number=pr_number,
-            commit_sha=pr_info["commit_sha"],
-            diff_url=pr_info["diff_url"],
-            status=PipelineStatus.extracting
+            commit_sha=commit_sha,
+            diff_url=pr_info.get("diff_url"),
+            status=PipelineStatus.queued
         )
         db.add(pipeline_run)
         db.commit()
-        db.refresh(pipeline_run)
 
-        # Start pipeline asynchronously (in production, use a task queue)
+        # Start async pipeline
+        _run_pipeline_async(pipeline_run_id, pr_info)
+
+        return JSONResponse(
+            content={
+                "status": "pipeline_started",
+                "pr_number": pr_number,
+                "pipeline_run_id": pipeline_run_id
+            },
+            status_code=200
+        )
+
+    finally:
+        db.close()
+
+
+def _run_pipeline_async(pipeline_run_id: str, pr_info: Dict[str, Any]) -> None:
+    """Run pipeline in a background thread with its own DB session."""
+    db = SessionLocal()
+    try:
+        _run_pipeline(pipeline_run_id, pr_info, db)
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {e}")
+        db_ = SessionLocal()
         try:
-            _run_pipeline(pipeline_run.id, pr_info, db)
-        except Exception as e:
-            logger.error(f"Pipeline execution failed: {e}")
-            pipeline_run.status = PipelineStatus.failed
-            db.commit()
-
-        return {
-            "status": "pipeline_started",
-            "pipeline_run_id": pipeline_run.id,
-            "pr_number": pr_number,
-            "repository": repo_full_name
-        }
+            run = db_.query(PipelineRun).filter(PipelineRun.id == pipeline_run_id).first()
+            if run:
+                run.status = PipelineStatus.failed
+                db_.commit()
+        finally:
+            db_.close()
     finally:
         db.close()
 

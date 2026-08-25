@@ -28,6 +28,7 @@
         .passed { color: #51cf66; }
         .failed { color: #ff6b6b; }
         .skipped { color: #fcc419; }
+        .pending { color: #888; }
         .recommendation { font-size: 1.25rem; font-weight: bold; padding: 1rem; border-radius: 8px; text-align: center; margin-top: 1rem; }
         .recommendation.merge { background: #2b8a3e; color: #fff; }
         .recommendation.review { background: #e67700; color: #fff; }
@@ -35,133 +36,296 @@
         .back-link { display: inline-block; margin-bottom: 1rem; color: #4dabf7; text-decoration: none; }
         .back-link:hover { text-decoration: underline; }
         .empty { text-align: center; padding: 2rem; color: #666; }
+        .screenshot { margin-top: 0.5rem; }
+        .screenshot img { border-radius: 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .screenshot a { color: #4dabf7; }
+        .screenshot a:hover { color: #74c0fc; }
+        .run-meta { display: flex; gap: 1.5rem; margin-top: 0.5rem; color: #888; font-size: 0.9rem; }
+        .run-meta span { display: flex; align-items: center; gap: 0.5rem; }
+        .heal-attempts { margin-top: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .heal-badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
+        .heal-proposed { background: #1864ab; color: #fff; }
+        .heal-accepted { background: #e67700; color: #fff; }
+        .heal-verified { background: #2b8a3e; color: #fff; }
+        .heal-rejected { background: #c92a2a; color: #fff; }
+        .heal-pending { background: #495057; color: #fff; }
+        .test-details { font-size: 0.875rem; color: #888; margin-top: 0.25rem; }
+        .loading-spinner {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 4rem;
+        }
+        .spinner {
+            width: 48px; height: 48px; border: 4px solid #2a2a3e; border-top: 4px solid #4dabf7;
+            border-radius: 50%; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loading-text { margin-top: 1rem; color: #888; }
+        .error-container { text-align: center; padding: 4rem; }
+        .error-message { color: #ff6b6b; font-size: 1.25rem; margin-bottom: 1rem; }
+        .retry-btn {
+            background: #4dabf7; color: #fff; border: none; padding: 0.75rem 1.5rem;
+            border-radius: 6px; font-size: 1rem; cursor: pointer; transition: background 0.2s;
+        }
+        .retry-btn:hover { background: #74c0fc; }
+        .not-found { text-align: center; padding: 4rem; }
+        .not-found h2 { font-size: 2rem; color: #ff6b6b; margin-bottom: 1rem; }
+        .not-found p { color: #888; margin-bottom: 1.5rem; }
+        .failure-message {
+            background: rgba(255, 107, 107, 0.1); border-left: 3px solid #ff6b6b;
+            padding: 0.75rem; margin-top: 0.5rem; border-radius: 0 4px 4px 0; font-size: 0.875rem;
+        }
+        .test-type { color: #888; font-size: 0.8rem; margin-left: 0.5rem; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>👻 Ghost QA Report</h1>
+        <div class="run-meta" id="run-meta">
+            <span>Loading...</span>
+        </div>
     </div>
     <div class="container">
         <a href="/dashboard" class="back-link">← Back to Dashboard</a>
 
-        <div class="card">
-            <h2>Summary</h2>
-            <div class="summary-grid">
-                <div class="summary-item">
-                    <div class="label">Total Tests</div>
-                    <div class="value" id="total-tests">-</div>
-                </div>
-                <div class="summary-item">
-                    <div class="label">Passed</div>
-                    <div class="value" style="color: #51cf66;" id="passed">-</div>
-                </div>
-                <div class="summary-item">
-                    <div class="label">Failed</div>
-                    <div class="value" style="color: #ff6b6b;" id="failed">-</div>
-                </div>
-                <div class="summary-item">
-                    <div class="label">Skipped</div>
-                    <div class="value" style="color: #fcc419;" id="skipped">-</div>
-                </div>
-                <div class="summary-item">
-                    <div class="label">Timed Out</div>
-                    <div class="value" style="color: #fcc419;" id="timed-out">-</div>
+        <!-- Loading Spinner -->
+        <div id="loading-spinner" class="loading-spinner">
+            <div class="spinner"></div>
+            <div class="loading-text">Loading report...</div>
+        </div>
+
+        <!-- Error Container -->
+        <div id="error-container" class="error-container" style="display: none;">
+            <div class="error-message" id="error-message"></div>
+            <button class="retry-btn" onclick="loadReport()">Retry</button>
+        </div>
+
+        <!-- Not Found -->
+        <div id="not-found" class="not-found" style="display: none;">
+            <h2>Run not found</h2>
+            <p>The pipeline run you're looking for doesn't exist or has been removed.</p>
+            <a href="/dashboard" class="retry-btn" style="text-decoration: none; display: inline-block;">Back to Dashboard</a>
+        </div>
+
+        <!-- Report Content -->
+        <div id="report-content" style="display: none;">
+            <div class="card">
+                <h2>Summary</h2>
+                <div class="summary-grid">
+                    <div class="summary-item">
+                        <div class="label">Total Tests</div>
+                        <div class="value" id="total-tests">-</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Passed</div>
+                        <div class="value" style="color: #51cf66;" id="passed">-</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Failed</div>
+                        <div class="value" style="color: #ff6b6b;" id="failed">-</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Skipped</div>
+                        <div class="value" style="color: #fcc419;" id="skipped">-</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="label">Timed Out</div>
+                        <div class="value" style="color: #fcc419;" id="timed-out">-</div>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <div class="card">
-            <h2>Risk Assessment</h2>
-            <div id="risk-level" class="risk-badge">-</div>
-            <div id="recommendation" class="recommendation">-</div>
-        </div>
+            <div class="card">
+                <h2>Risk Assessment</h2>
+                <div id="risk-level" class="risk-badge">-</div>
+                <div id="recommendation" class="recommendation">-</div>
+            </div>
 
-        <div class="card">
-            <h2>Critical Failures</h2>
-            <ul id="critical-failures">
-                <li class="empty">None</li>
-            </ul>
-        </div>
+            <div class="card">
+                <h2>Critical Failures</h2>
+                <ul id="critical-failures">
+                    <li class="empty">None</li>
+                </ul>
+            </div>
 
-        <div class="card">
-            <h2>High-Risk Tests</h2>
-            <ul id="high-risk-tests">
-                <li class="empty">None</li>
-            </ul>
-        </div>
+            <div class="card">
+                <h2>High-Risk Tests</h2>
+                <ul id="high-risk-tests">
+                    <li class="empty">None</li>
+                </ul>
+            </div>
 
-        <div class="card">
-            <h2>Test Details</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Test</th>
-                        <th>Priority</th>
-                        <th>Outcome</th>
-                        <th>Failure</th>
-                    </tr>
-                </thead>
-                <tbody id="tests-table">
-                    <tr><td colspan="4" class="empty">Loading...</td></tr>
-                </tbody>
-            </table>
+            <div class="card">
+                <h2>Test Details</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Test</th>
+                            <th>Type</th>
+                            <th>Priority</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tests-table">
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
     <script>
         async function loadReport() {
             const runId = window.location.pathname.split('/').pop();
+            const loadingSpinner = document.getElementById('loading-spinner');
+            const errorContainer = document.getElementById('error-container');
+            const notFound = document.getElementById('not-found');
+            const reportContent = document.getElementById('report-content');
+
+            // Show loading spinner, hide others
+            loadingSpinner.style.display = 'flex';
+            errorContainer.style.display = 'none';
+            notFound.style.display = 'none';
+            reportContent.style.display = 'none';
+
             try {
-                const response = await fetch(`/api/runs/${runId}/report`);
+                const response = await fetch(`/api/dashboard/runs/${runId}/details`);
+                
+                if (response.status === 404) {
+                    loadingSpinner.style.display = 'none';
+                    notFound.style.display = 'block';
+                    return;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
-
-                document.getElementById('total-tests').textContent = data.total_tests;
-                document.getElementById('passed').textContent = data.passed;
-                document.getElementById('failed').textContent = data.failed;
-                document.getElementById('skipped').textContent = data.skipped;
-                document.getElementById('timed-out').textContent = data.timed_out;
-
+                
+                // Render run meta in header
+                const metaEl = document.getElementById('run-meta');
+                metaEl.innerHTML = `
+                    <span><strong>PR:</strong> #${data.pr_number || '-'}</span>
+                    <span><strong>Commit:</strong> ${(data.commit_sha || '').slice(0, 7)}</span>
+                    <span><strong>Risk:</strong> <span class="risk-badge risk-${data.risk_level || 'low'}">${(data.risk_level || 'unknown').toUpperCase()}</span></span>
+                    <span><strong>Status:</strong> ${(data.status || 'unknown').replace('_', ' ')}</span>
+                `;
+                
+                // Calculate summary stats
+                const testCases = data.test_cases || [];
+                const passed = testCases.filter(t => t.outcome === 'passed').length;
+                const failed = testCases.filter(t => t.outcome === 'failed').length;
+                const skipped = testCases.filter(t => t.outcome === 'skipped').length;
+                const timedOut = testCases.filter(t => t.outcome === 'timed_out').length;
+                const total = testCases.length;
+                
+                document.getElementById('total-tests').textContent = total;
+                document.getElementById('passed').textContent = passed;
+                document.getElementById('failed').textContent = failed;
+                document.getElementById('skipped').textContent = skipped;
+                document.getElementById('timed-out').textContent = timedOut;
+                
+                // Render risk level
+                const riskLevel = data.risk_level || 'unknown';
                 const riskEl = document.getElementById('risk-level');
-                riskEl.textContent = data.risk_level.toUpperCase();
-                riskEl.className = 'risk-badge risk-' + data.risk_level;
-
+                riskEl.textContent = riskLevel.toUpperCase();
+                riskEl.className = 'risk-badge risk-' + riskLevel;
+                
+                // Determine recommendation
+                let recommendation = 'MERGE';
+                if (timedOut > 0 && failed === 0 && skipped === 0) {
+                    recommendation = 'REVIEW REQUIRED';
+                } else if (failed > 0 || skipped > 0 || timedOut > 0) {
+                    recommendation = 'BLOCK';
+                }
+                
                 const recEl = document.getElementById('recommendation');
-                recEl.textContent = data.recommendation;
-                recEl.className = 'recommendation ' + (data.recommendation === 'MERGE' ? 'merge' : data.recommendation === 'REVIEW REQUIRED' ? 'review' : 'block');
-
+                recEl.textContent = recommendation === 'MERGE' ? 'MERGE' : recommendation === 'REVIEW REQUIRED' ? 'REVIEW REQUIRED' : 'BLOCK MERGE';
+                recEl.className = 'recommendation ' + (recommendation === 'MERGE' ? 'merge' : recommendation === 'REVIEW REQUIRED' ? 'review' : 'block');
+                
+                // Render critical failures
                 const cfList = document.getElementById('critical-failures');
-                if (data.critical_failures.length === 0) {
+                const criticalFailures = testCases.filter(t => t.outcome === 'failed' && t.priority === 'P0' && t.failure_message);
+                if (criticalFailures.length === 0) {
                     cfList.innerHTML = '<li class="empty">None</li>';
                 } else {
-                    cfList.innerHTML = data.critical_failures.map(f => `<li class="failed">${f}</li>`).join('');
+                    cfList.innerHTML = criticalFailures.map(f => `<li class="failed">${f.title}: ${f.failure_message}</li>`).join('');
                 }
-
+                
+                // Render high-risk tests
                 const hrList = document.getElementById('high-risk-tests');
-                if (data.high_risk_tests.length === 0) {
+                const highRiskTests = testCases.filter(t => ['P0', 'P1'].includes(t.priority) && t.outcome !== 'passed');
+                if (highRiskTests.length === 0) {
                     hrList.innerHTML = '<li class="empty">None</li>';
                 } else {
-                    hrList.innerHTML = data.high_risk_tests.map(t => `<li>${t}</li>`).join('');
+                    hrList.innerHTML = highRiskTests.map(t => `<li>${t.title} (${t.priority})</li>`).join('');
                 }
-
-                // Load tests table
-                const testsResponse = await fetch(`/api/runs/${runId}/tests`);
-                const tests = await testsResponse.json();
+                
+                // Render tests table
                 const tbody = document.getElementById('tests-table');
-                if (tests.length === 0) {
+                if (testCases.length === 0) {
                     tbody.innerHTML = '<tr><td colspan="4" class="empty">No tests found</td></tr>';
                 } else {
-                    tbody.innerHTML = tests.map(t => {
-                        const outcomeClass = t.outcome === 'passed' ? 'passed' : t.outcome === 'failed' ? 'failed' : 'skipped';
-                        return `<tr>
-                            <td>${t.title}</td>
-                            <td>${t.priority || '-'}</td>
-                            <td class="${outcomeClass}">${t.outcome || 'pending'}</td>
-                            <td>${t.failure_message || '-'}</td>
-                        </tr>`;
+                    tbody.innerHTML = testCases.map(t => {
+                        const outcomeClass = t.outcome === 'passed' ? 'passed' : 
+                                           t.outcome === 'failed' ? 'failed' : 
+                                           t.outcome === 'timed_out' ? 'skipped' : 'skipped';
+                        
+                        // Render heal attempts
+                        let healAttemptsHtml = '';
+                        if (t.heal_attempts && t.heal_attempts.length > 0) {
+                            const healBadges = t.heal_attempts.map(h => {
+                                const statusClass = {
+                                    'proposed': 'heal-proposed',
+                                    'accepted': 'heal-accepted',
+                                    'verified': 'heal-verified',
+                                    'rejected': 'heal-rejected'
+                                }[h.status] || 'heal-pending';
+                                return `<span class="heal-badge ${statusClass}">${h.status}</span>`;
+                            }).join('');
+                            healAttemptsHtml = `<div class="heal-attempts">Heal: ${healBadges}</div>`;
+                        }
+                        
+                        // Render failure message for failed/timed_out
+                        let failureHtml = '';
+                        if ((t.outcome === 'failed' || t.outcome === 'timed_out') && t.failure_message) {
+                            failureHtml = `<div class="failure-message">${t.failure_message}</div>`;
+                        }
+                        
+                        // Render screenshot
+                        let screenshotHtml = '';
+                        if (t.screenshot_url) {
+                            screenshotHtml = `<div class="screenshot">
+                                <a href="${t.screenshot_url}" target="_blank">
+                                    <img src="${t.screenshot_url}" width="120" alt="Screenshot" loading="lazy" />
+                                </a>
+                            </div>`;
+                        }
+                        
+                        return `
+                            <tr>
+                                <td>
+                                    <div>${t.title}</div>
+                                    ${t.test_type ? `<span class="test-type">${t.test_type}</span>` : ''}
+                                    ${failureHtml}
+                                    ${screenshotHtml}
+                                    ${healAttemptsHtml}
+                                </td>
+                                <td>${t.test_type || '-'}</td>
+                                <td>${t.priority || '-'}</td>
+                                <td class="${outcomeClass}">${(t.outcome || 'pending').replace('_', ' ')}</td>
+                            </tr>
+                        `;
                     }).join('');
                 }
+                
+                // Hide loading, show content
+                loadingSpinner.style.display = 'none';
+                reportContent.style.display = 'block';
+                
             } catch (error) {
                 console.error('Failed to load report:', error);
+                loadingSpinner.style.display = 'none';
+                errorContainer.style.display = 'block';
+                document.getElementById('error-message').textContent = `Failed to load report: ${error.message}`;
             }
         }
 

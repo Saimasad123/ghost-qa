@@ -10,6 +10,14 @@
         .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 2rem; border-bottom: 1px solid #2a2a3e; }
         .header h1 { font-size: 2rem; color: #fff; }
         .header p { color: #888; margin-top: 0.5rem; }
+        .header-actions { float: right; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.875rem; font-weight: 500; }
+        .btn-primary { background: #4dabf7; color: #fff; }
+        .btn-primary:hover { background: #74c0fc; }
+        .btn-secondary { background: #495057; color: #fff; }
+        .btn-secondary:hover { background: #6c757d; }
+        .btn-success { background: #2b8a3e; color: #fff; }
+        .btn-success:hover { background: #37b24d; }
         .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
         .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
         .stat-card { background: #12121a; border: 1px solid #2a2a3e; border-radius: 8px; padding: 1.5rem; }
@@ -34,14 +42,60 @@
         a { color: #4dabf7; text-decoration: none; }
         a:hover { text-decoration: underline; }
         .empty { text-align: center; padding: 3rem; color: #666; }
+        .error-message { background: #c92a2a; color: #fff; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+        .error-message button { float: right; background: transparent; border: none; color: #fff; cursor: pointer; font-size: 1.25rem; }
+        /* Login Form Styles */
+        #login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        #login-overlay.hidden { display: none; }
+        .login-box { background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 12px; padding: 2rem; width: 100%; max-width: 400px; }
+        .login-box h2 { margin-bottom: 1.5rem; color: #fff; text-align: center; }
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; color: #888; font-size: 0.875rem; }
+        .form-group input { width: 100%; padding: 0.75rem; border: 1px solid #2a2a3e; border-radius: 6px; background: #0a0a0f; color: #fff; font-size: 1rem; }
+        .form-group input:focus { outline: none; border-color: #4dabf7; }
+        .login-box .btn { width: 100%; padding: 0.75rem; margin-top: 1rem; }
+        .login-error { color: #ff6b6b; font-size: 0.875rem; margin-top: 0.5rem; text-align: center; }
+        .actions-cell { white-space: nowrap; }
+        .approve-btn { margin-right: 0.5rem; }
+        .approved-label { color: #51cf66; font-weight: 500; }
+        .inline-error { color: #ff6b6b; font-size: 0.75rem; margin-left: 0.5rem; }
     </style>
 </head>
 <body>
+    <!-- Login Overlay (shown when not authenticated) -->
+    <div id="login-overlay">
+        <div class="login-box">
+            <h2>👻 Ghost QA Login</h2>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required placeholder="Enter your email">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required placeholder="Enter your password">
+                </div>
+                <button type="submit" class="btn btn-primary">Sign In</button>
+                <div id="login-error" class="login-error"></div>
+            </form>
+        </div>
+    </div>
+
     <div class="header">
         <h1>👻 Ghost QA Dashboard</h1>
         <p>AI-powered QA engineer for CI/CD pipelines</p>
+        <div class="header-actions">
+            <button id="logout-btn" class="btn btn-secondary" style="display: none;">Logout</button>
+        </div>
     </div>
+
     <div class="container">
+        <!-- Error Display Area -->
+        <div id="error-display" class="error-message" style="display: none;">
+            <button onclick="dismissError()">&times;</button>
+            <span id="error-text"></span>
+        </div>
+
         <div class="stats">
             <div class="stat-card">
                 <h3>Repositories</h3>
@@ -68,19 +122,157 @@
                         <th>Status</th>
                         <th>Risk</th>
                         <th>Created</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="runs-table">
-                    <tr><td colspan="6" class="empty">Loading...</td></tr>
+                    <tr><td colspan="7" class="empty">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
     </div>
 
     <script>
+        // Auth state management
+        const AUTH_TOKEN_KEY = 'ghost_qa_token';
+
+        function getToken() {
+            return localStorage.getItem(AUTH_TOKEN_KEY);
+        }
+
+        function setToken(token) {
+            localStorage.setItem(AUTH_TOKEN_KEY, token);
+        }
+
+        function clearToken() {
+            localStorage.removeItem(AUTH_TOKEN_KEY);
+        }
+
+        function getAuthHeaders() {
+            const token = getToken();
+            if (token) {
+                return {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                };
+            }
+            return {
+                'Content-Type': 'application/json'
+            };
+        }
+
+        function isAuthenticated() {
+            return !!getToken();
+        }
+
+        function updateAuthUI() {
+            const overlay = document.getElementById('login-overlay');
+            const logoutBtn = document.getElementById('logout-btn');
+            if (isAuthenticated()) {
+                overlay.classList.add('hidden');
+                logoutBtn.style.display = 'inline-block';
+            } else {
+                overlay.classList.remove('hidden');
+                logoutBtn.style.display = 'none';
+            }
+        }
+
+        function showError(message) {
+            const errorDisplay = document.getElementById('error-display');
+            const errorText = document.getElementById('error-text');
+            errorText.textContent = message;
+            errorDisplay.style.display = 'block';
+        }
+
+        function dismissError() {
+            const errorDisplay = document.getElementById('error-display');
+            errorDisplay.style.display = 'none';
+        }
+
+        // Login form handler
+        document.getElementById('login-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorEl = document.getElementById('login-error');
+
+            try {
+                const response = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    errorEl.textContent = data.detail || 'Login failed';
+                    return;
+                }
+
+                setToken(data.token);
+                updateAuthUI();
+                loadDashboard();
+            } catch (error) {
+                errorEl.textContent = 'Network error. Please try again.';
+            }
+        });
+
+        // Logout handler
+        document.getElementById('logout-btn').addEventListener('click', function() {
+            clearToken();
+            updateAuthUI();
+        });
+
+        // Approve All functionality
+        async function approveAll(runId, buttonElement) {
+            const errorSpan = buttonElement.parentElement.querySelector('.inline-error');
+            if (errorSpan) errorSpan.remove();
+
+            try {
+                const response = await fetch(`/api/runs/${runId}/approve`, {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    const errorMsg = errorData.detail || errorData.error || 'Approval failed';
+                    // Show inline error
+                    const errorSpan = document.createElement('span');
+                    errorSpan.className = 'inline-error';
+                    errorSpan.textContent = errorMsg;
+                    buttonElement.parentElement.appendChild(errorSpan);
+                    return;
+                }
+
+                // Success: replace button with "Approved" label
+                const actionsCell = buttonElement.parentElement;
+                actionsCell.innerHTML = '<span class="approved-label">Approved</span>';
+            } catch (error) {
+                const errorSpan = document.createElement('span');
+                errorSpan.className = 'inline-error';
+                errorSpan.textContent = 'Network error. Please try again.';
+                buttonElement.parentElement.appendChild(errorSpan);
+            }
+        }
+
         async function loadDashboard() {
             try {
-                const response = await fetch('/api/dashboard/overview');
+                const response = await fetch('/api/dashboard/overview', {
+                    headers: getAuthHeaders()
+                });
+
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        clearToken();
+                        updateAuthUI();
+                        showError('Session expired. Please log in again.');
+                        return;
+                    }
+                    throw new Error('Failed to load dashboard');
+                }
+
                 const data = await response.json();
                 document.getElementById('total-repos').textContent = data.total_repositories;
                 document.getElementById('total-runs').textContent = data.total_pipeline_runs;
@@ -88,7 +280,7 @@
 
                 const tbody = document.getElementById('runs-table');
                 if (data.recent_runs.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="empty">No pipeline runs yet. Trigger a webhook to get started.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="empty">No pipeline runs yet. Trigger a webhook to get started.</td></tr>';
                     return;
                 }
 
@@ -104,6 +296,11 @@
                         'high': 'badge-danger', 'critical': 'badge-danger'
                     }[run.risk_level] || 'badge-gray';
 
+                    const canApprove = run.status === 'awaiting_approval';
+                    const actionsHtml = canApprove
+                        ? `<button class="btn btn-success approve-btn" onclick="approveAll('${run.id}', this)">Approve All</button>`
+                        : '-';
+
                     return `<tr>
                         <td><a href="/report/${run.id}">${run.id.slice(0, 8)}...</a></td>
                         <td>${run.repository}</td>
@@ -111,15 +308,29 @@
                         <td><span class="badge ${statusClass}">${run.status}</span></td>
                         <td>${run.risk_level ? `<span class="badge ${riskClass}">${run.risk_level}</span>` : '-'}</td>
                         <td>${run.created_at ? new Date(run.created_at).toLocaleString() : '-'}</td>
+                        <td class="actions-cell">${actionsHtml}</td>
                     </tr>`;
                 }).join('');
             } catch (error) {
                 console.error('Failed to load dashboard:', error);
+                showError('Failed to load dashboard. Please check your connection and try again.');
             }
         }
 
-        loadDashboard();
-        setInterval(loadDashboard, 30000);
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateAuthUI();
+            if (isAuthenticated()) {
+                loadDashboard();
+            }
+        });
+
+        // Auto-refresh every 30 seconds
+        setInterval(function() {
+            if (isAuthenticated()) {
+                loadDashboard();
+            }
+        }, 30000);
     </script>
 </body>
 </html>

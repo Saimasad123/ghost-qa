@@ -9,8 +9,17 @@ from app.main import app
 
 @pytest.fixture
 def client():
-    from app.database import init_db
+    from app.database import init_db, SessionLocal
     init_db()
+    
+    # Clear all data from tables
+    from app.database import Base
+    session = SessionLocal()
+    for table in reversed(Base.metadata.sorted_tables):
+        session.execute(table.delete())
+    session.commit()
+    session.close()
+    
     with TestClient(app) as c:
         yield c
 
@@ -118,7 +127,7 @@ class TestWebhookHTTP:
 
     def test_valid_webhook(self, client):
         """Valid webhook should start a pipeline."""
-        payload = _make_webhook_payload()
+        payload = _make_webhook_payload(pr_number=100)
         response = client.post(
             "/api/webhooks/github",
             json=payload,
@@ -127,7 +136,7 @@ class TestWebhookHTTP:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "pipeline_started"
-        assert data["pr_number"] == 42
+        assert data["pr_number"] == 100
 
     def test_invalid_signature(self, client):
         """Invalid signature should return 401 when secret is configured."""

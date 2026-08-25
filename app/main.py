@@ -1,11 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi import Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from app.config import settings
 from app.database import init_db
-from app.api import webhooks, runs, tests, heals, dashboard
+from app.api import webhooks, runs, tests, heals, dashboard, auth, orgs
+from app.middleware.auth import JWTMiddleware
 import logging
 import os
 
@@ -31,6 +34,35 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address, enabled=settings.RATE_LIMIT_ENABLED)
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    """Custom rate limit handler that logs and returns JSON response."""
+    client_ip = request.client.host if request.client else "unknown"
+    endpoint = request.url.path
+    # Extract retry_after from slowapi's detail message or use default
+    retry_after = "60"
+    if hasattr(exc, "retry_after"):
+        retry_after = str(exc.retry_after)
+    elif " " in exc.detail:
+        try:
+            retry_after = exc.detail.split("Retry after ")[-1].split(" ")[0]
+        except Exception:
+            pass
+    logger.warning(f"Rate limit exceeded for IP {client_ip} on endpoint {endpoint}")
+    return __import__("fastapi").responses.JSONResponse(
+        status_code=429,
+        content={"error": f"Rate limit exceeded. Retry after {retry_after} seconds."},
+        headers={"Retry-After": retry_after}
+    )
+
+# JWT Middleware
+app.add_middleware(JWTMiddleware)
+
 # CORS
 app.add_middleware(
     CORSMiddleware,
@@ -50,6 +82,8 @@ app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
 app.include_router(tests.router, prefix="/api/tests", tags=["tests"])
 app.include_router(heals.router, prefix="/api/heals", tags=["heals"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(orgs.router, prefix="/api/orgs", tags=["orgs"])
 
 
 @app.get("/")

@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ghost_qa
+      POSTGRES_USER: ghost_qa
+      POSTGRES_PASSWORD: password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ghost_qa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ghost-qa:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://ghost_qa:password@postgres:5432/ghost_qa
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

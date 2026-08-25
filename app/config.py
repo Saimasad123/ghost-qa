@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
@@ -36,6 +37,8 @@ class Settings(BaseSettings):
     UIPATH_ORG_ID: Optional[str] = None
     UIPATH_ENVIRONMENT_ID: Optional[str] = None
     UIPATH_TEST_FOLDER: str = "GhostQA"
+    UIPATH_EXECUTION_TIMEOUT_SECONDS: int = 300
+    UIPATH_TEST_MANAGER_BASE: str = "https://cloud.uipath.com"
 
     # Slack (optional)
     SLACK_BOT_TOKEN: Optional[str] = None
@@ -43,6 +46,20 @@ class Settings(BaseSettings):
 
     # Security
     SECRET_KEY: str = "change-me-in-production"
+
+    # Auth & JWT
+    JWT_EXPIRY_MINUTES: int = Field(default=60, ge=15, le=1440)
+    AUTH_USERS: str = '{"admin@ghost.qa": {"password_hash": "changeme", "role": "approver"}}'
+
+    # Rate limiting
+    RATE_LIMIT_ENABLED: bool = True
+
+    # Approval SLA
+    APPROVAL_SLA_WARN_HOURS: int = 4
+    APPROVAL_SLA_REJECT_HOURS: int = 24
+
+    # UiPath Action Center
+    UIPATH_ACTION_CENTER_BASE: str = "https://cloud.uipath.com"
 
 
 settings = Settings()

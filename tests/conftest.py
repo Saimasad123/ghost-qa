@@ -24,8 +24,15 @@ def setup_test_db():
     yield
     TestEngine.dispose()
     import os
+    import time
     if os.path.exists("./test_ghost_qa.db"):
-        os.remove("./test_ghost_qa.db")
+        # On Windows, give a moment for file handles to close
+        time.sleep(0.1)
+        try:
+            os.remove("./test_ghost_qa.db")
+        except PermissionError:
+            # If still locked, just pass - the next test run will overwrite it
+            pass
 
 
 @pytest.fixture

@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Test XAML Generator",
+  "description": "Write tests for xaml_generator.py to verify 0-step, 1-step, and N-step test case generation",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Write comprehensive unit tests for d:\\WORKING\\PORTFOLIO\\FEATURED PROJECTS\\ghost-qa\\app\\services\\xaml_generator.py\n\nTest requirements:\n1. Test 0-step test case: verify generate_xaml produces a valid XAML with no <ui:Sequence> elements\n2. Test 1-step test case: verify generate_xaml produces exactly 1 <ui:Sequence> element\n3. Test N-step test case: verify generate_xaml produces exactly N <ui:Sequence> elements for N > 1\n4. Test that the generated XAML contains the required namespace declaration: xmlns:ui=\"http://schemas.uipath.com/workflow/activities\"\n5. Test that the root Activity element has the correct attributes including DisplayName and sap2010:WorkflowViewState.IdRef\n\nCreate the test file at: d:\\WORKING\\PORTFOLIO\\FEATURED PROJECTS\\ghost-qa\\tests\\test_xaml_generator.py\n\nThe XAMLGenerator class is imported from app.services.xaml_generator.\n\nUse pytest as the test framework."
+  }
+}
